@@ -1,0 +1,2 @@
+# Keep source and preset bytes stable in Windows and POSIX checkouts.
+* text=auto eol=lf

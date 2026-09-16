@@ -18,7 +18,7 @@ const MUTATION_TOOLS = ['write', 'edit', 'multi_edit', 'apply_patch', 'str_repla
 test('the three capable variants mount the discipline and declare their channels', () => {
   for (const variant of ['standard', 'ptc', 'cordis']) {
     const text = read(variant)
-    assert.match(text, /- id: rigor-4\n\s+name: 'dsh-rigor-4'/, `${variant} mounts dsh-rigor-4`)
+    assert.match(text, /- id: rigor-4\r?\n\s+name: 'dsh-rigor-4'/, `${variant} mounts dsh-rigor-4`)
     assert.match(text, /children: true/, `${variant} declares the child channel`)
     assert.match(text, /person: true/, `${variant} declares the question channel`)
   }
@@ -72,5 +72,5 @@ test('the minimal variant declares no child channel and mounts no role row', () 
   assert.match(text, /person: false/)
   assert.ok(!/toolName: subagent_explore/.test(text), 'minimal has no explore row')
   assert.ok(!/toolName: subagent_review/.test(text), 'minimal has no review row')
-  assert.match(text, /- id: rigor-4\n\s+name: 'dsh-rigor-4'/, 'minimal still mounts the discipline')
+  assert.match(text, /- id: rigor-4\r?\n\s+name: 'dsh-rigor-4'/, 'minimal still mounts the discipline')
 })

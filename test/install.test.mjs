@@ -17,8 +17,11 @@ async function tree(root) {
   return out
 }
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rigor-native-install-'))
-  t.after(async () => { assert.equal(path.dirname(root), os.tmpdir()); assert.ok(path.basename(root).startsWith('rigor-native-install-')); await fs.rm(root, { recursive: true, force: true }) })
+  // Windows CI may spell TEMP with an 8.3 alias; the installer deliberately
+  // resolves DSH_HOME to its canonical path before building every target.
+  const temporaryRoot = await fs.realpath(os.tmpdir())
+  const root = await fs.mkdtemp(path.join(temporaryRoot, 'rigor-native-install-'))
+  t.after(async () => { assert.equal(path.dirname(root), temporaryRoot); assert.ok(path.basename(root).startsWith('rigor-native-install-')); await fs.rm(root, { recursive: true, force: true }) })
   const dshHome = path.join(root, 'home with spaces'), source = path.join(root, 'source'), profile = path.join(dshHome, 'profiles', 'web'), host = path.join(root, 'official-host')
   await fs.mkdir(profile, { recursive: true })
   await fs.mkdir(path.join(source, 'src'), { recursive: true })
@@ -86,6 +89,19 @@ test('preview is read-only and names native operations, archive and presets', as
   assert.equal(shown.presets.filter(item => item.action === 'create').length, 8)
   assert.equal(shown.commands.length, 3)
   assert.deepEqual(await tree(f.root), before)
+})
+
+test('an aliased DSH home produces canonical native command and preset paths', async t => {
+  const f = await fixture(t), alias = path.join(f.root, 'home alias')
+  await fs.symlink(f.dshHome, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const plan = await buildPlan({ ...f.options, dshHome: alias })
+  assert.equal(plan.dshHome, f.dshHome)
+  assert.equal(plan.profileRoot, f.profile)
+  assert.equal(plan.presets[0].target, path.join(f.dshHome, '.agent-presets', 'rigor-4', 'preset.yml'))
+  const calls = []
+  assert.equal((await applyPlan(plan, { run: nativeRunner(f, calls) })).verified, true)
+  assert.equal(calls.length, 3)
+  assert.ok(calls.every(command => command.env.DSH_HOME === f.dshHome))
 })
 test('forwards operations; only native runner owns modules and lock bytes', async t => {
   const f = await fixture(t), calls = [], beforeWorkspace = await fs.readFile(path.join(f.profile, 'pnpm-workspace.yaml'), 'utf8')
