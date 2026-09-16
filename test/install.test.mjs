@@ -69,7 +69,7 @@ function nativeRunner(f, calls, failLabel) {
       await fs.copyFile(path.join(f.source, 'src', 'index.js'), path.join(installed, 'src', 'index.js'))
     } else {
       assert.equal(command.label, 'dsh plugin install --lockfile-only')
-      assert.equal(manifest.dependencies[NAME], 'file:../../plugin-packages/dsh-rigor-4-0.1.2.tgz')
+      assert.equal(manifest.dependencies[NAME], 'file:../../third-party/archives/dsh-rigor-4-0.1.2.tgz')
       await fs.writeFile(path.join(f.profile, 'pnpm-lock.yaml'), 'opaque native-generated lock\n')
     }
     return { stdout: '' }
@@ -85,7 +85,7 @@ test('default mode previews and accepts explicit native paths', () => {
 test('preview is read-only and names native operations, archive and presets', async t => {
   const f = await fixture(t), before = await tree(f.root)
   const plan = await buildPlan(f.options), shown = preview(plan)
-  assert.equal(plan.dependency, 'file:../../plugin-packages/dsh-rigor-4-0.1.2.tgz')
+  assert.equal(plan.dependency, 'file:../../third-party/archives/dsh-rigor-4-0.1.2.tgz')
   assert.equal(shown.presets.filter(item => item.action === 'create').length, 8)
   assert.equal(shown.commands.length, 3)
   assert.deepEqual(await tree(f.root), before)
@@ -115,7 +115,7 @@ test('forwards operations; only native runner owns modules and lock bytes', asyn
   assert.equal(await fs.readFile(path.join(f.profile, 'pnpm-workspace.yaml'), 'utf8'), beforeWorkspace)
   assert.equal(await exists(path.join(f.dshHome, 'local-plugins')), false)
   assert.equal(await exists(path.join(f.dshHome, 'profiles', 'node_modules')), false)
-  assert.deepEqual((await fs.readdir(path.join(f.dshHome, 'plugin-packages'))), [`${NAME}-0.1.2.tgz`])
+  assert.deepEqual((await fs.readdir(path.join(f.dshHome, 'third-party', 'archives'))), [`${NAME}-0.1.2.tgz`])
 })
 test('preserves custom presets unless replacement was explicit', async t => {
   const f = await fixture(t), target = path.join(f.dshHome, '.agent-presets', 'rigor-4', 'preset.yml')
@@ -136,7 +136,7 @@ test('repeat installation reuses immutable archive and leaves presets unchanged'
 })
 test('different bytes under an existing release version fail before native add', async t => {
   const f = await fixture(t), plan = await buildPlan(f.options), calls = []
-  await fs.mkdir(plan.archiveDir); await fs.writeFile(plan.archive, 'different archive')
+  await fs.mkdir(plan.archiveDir, { recursive: true }); await fs.writeFile(plan.archive, 'different archive')
   await assert.rejects(applyPlan(plan, { run: nativeRunner(f, calls) }), /different contents/)
   assert.deepEqual(calls.map(call => call.label), ['npm pack'])
   assert.equal(await fs.readFile(plan.archive, 'utf8'), 'different archive')
@@ -146,7 +146,7 @@ test('native add or lock failure does not install presets or claim rollback', as
     const f = await fixture(t), calls = []
     await assert.rejects(applyPlan(await buildPlan(f.options), { run: nativeRunner(f, calls, label) }), /native fixture failure/)
     assert.equal(await exists(path.join(f.dshHome, '.agent-presets')), false)
-    assert.ok((await fs.readdir(path.join(f.dshHome, 'plugin-packages'))).every(name => !name.startsWith('.rigor-pack-')))
+    assert.ok((await fs.readdir(path.join(f.dshHome, 'third-party', 'archives'))).every(name => !name.startsWith('.rigor-pack-')))
   }
 })
 test('preset change during native install is detected before any preset copy', async t => {
@@ -165,4 +165,48 @@ test('invalid profile and missing release files fail during preview', async t =>
   await assert.rejects(buildPlan({ ...f.options, profile: '../elsewhere' }), /plain directory name/)
   await fs.unlink(path.join(f.source, 'preset', 'minimal', 'preset.yml'))
   await assert.rejects(buildPlan(f.options), /ENOENT/)
+})
+
+test('setup reuses the profile store with an explicit native flag and previews the same flag', async t => {
+  const f = await fixture(t), storeDir = path.join(f.root, 'existing store'), calls = []
+  await fs.mkdir(path.join(f.profile, 'node_modules'))
+  await writeJson(path.join(f.profile, 'node_modules', '.modules.yaml'), { storeDir: path.join(storeDir, 'v11') })
+  const before = await tree(f.root), plan = await buildPlan(f.options)
+  assert.equal(plan.storeDir, storeDir)
+  assert.deepEqual(await tree(f.root), before)
+  for (const command of preview(plan).commands.slice(1)) assert.deepEqual(command.slice(-2), ['--store-dir', storeDir])
+  await applyPlan(plan, { run: nativeRunner(f, calls) })
+  for (const command of calls.slice(1)) {
+    const forwarded = command.args[command.args.indexOf('--store-dir') + 1]
+    assert.equal(forwarded, process.platform === 'win32' ? `"${storeDir}"` : storeDir)
+  }
+})
+
+test('an explicit store override bypasses unusable metadata', async t => {
+  const f = await fixture(t), storeDir = path.join(f.root, 'override')
+  await fs.mkdir(path.join(f.profile, 'node_modules'))
+  await fs.writeFile(path.join(f.profile, 'node_modules', '.modules.yaml'), 'invalid: [')
+  assert.equal((await buildPlan({ ...f.options, storeDir })).storeDir, storeDir)
+  await assert.rejects(buildPlan(f.options), /store metadata|YAML parser/)
+})
+
+test('implicit host discovery uses npm global root even with a profile-local DSH peer', async t => {
+  const f = await fixture(t), globalRoot = path.join(f.root, 'npm-global'), localHost = path.join(f.profile, 'node_modules', '@deepseek-ai', 'dsh')
+  const globalHost = path.join(globalRoot, '@deepseek-ai', 'dsh')
+  await fs.mkdir(path.dirname(globalHost), { recursive: true })
+  await fs.cp(f.options.dshPackage, globalHost, { recursive: true })
+  await fs.mkdir(path.join(localHost, 'lib'), { recursive: true })
+  await writeJson(path.join(localHost, 'package.json'), { name: '@deepseek-ai/dsh', version: '99.0.0' })
+  await fs.writeFile(path.join(localHost, 'lib', 'bin.js'), '// unrelated npx/profile peer')
+  const before = await tree(f.root), calls = []
+  const plan = await buildPlan({ ...f.options, dshPackage: undefined, probe: async command => {
+    calls.push(command)
+    assert.equal(command.label, 'npm root --global')
+    assert.deepEqual(command.args.slice(-2), ['root', '--global'])
+    return { stdout: globalRoot + '\n' }
+  } })
+  assert.equal(plan.dsh.prefix[0], path.join(globalHost, 'lib', 'bin.js'))
+  assert.equal(plan.dsh.version, '0.1.5-rc.2')
+  assert.equal(calls.length, 1)
+  assert.deepEqual(await tree(f.root), before)
 })

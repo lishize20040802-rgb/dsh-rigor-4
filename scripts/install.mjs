@@ -6,6 +6,7 @@ import os from 'node:os'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { findNpm, globalDshPackage, profileStoreDir } from './native-tools.mjs'
 
 const NAME = 'dsh-rigor-4'
 const SOURCE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -29,7 +30,7 @@ async function safeFile(dshHome, target) {
   }
 }
 
-/** Read-only preview; package-manager commands run only in applyPlan(). */
+/** Read-only preview; the only optional command probes npm's global directory. */
 export async function buildPlan(options = {}) {
   const profile = options.profile ?? 'web'
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(profile)) throw new Error('Profile must be one plain directory name')
@@ -45,22 +46,19 @@ export async function buildPlan(options = {}) {
   if (!(await present(path.join(packageRoot, 'src', 'index.js')))) throw new Error('Release is missing src/index.js')
   const currentProfile = await readJson(profileManifest)
   if (!currentProfile.dsh?.profile || !Array.isArray(currentProfile.dsh.profile.bundles)) throw new Error('Target is not an initialized official DSH profile (missing dsh.profile.bundles)')
-  let dsh = { executable: 'dsh', prefix: [] }
-  let suppliedDsh = options.dshPackage
-  if (!suppliedDsh) {
-    try { suppliedDsh = path.dirname(createRequire(profileManifest).resolve('@deepseek-ai/dsh/package.json')) } catch {}
-  }
-  if (suppliedDsh) {
-    const root = await fs.realpath(path.resolve(suppliedDsh))
+  const npm = await findNpm()
+  const suppliedDsh = options.dshPackage ?? await globalDshPackage(npm, options.probe ?? runCommand)
+  let dsh
+  const dshPackage = await fs.realpath(path.resolve(suppliedDsh))
+  {
+    const root = dshPackage
     const host = await readJson(path.join(root, 'package.json'))
     if (host.name !== '@deepseek-ai/dsh') throw new Error('--dsh-package must name the installed official @deepseek-ai/dsh package')
     const cli = path.join(root, 'lib', 'bin.js')
     if (!(await present(cli))) throw new Error(`Official DSH CLI is missing: ${cli}`)
     dsh = { executable: process.execPath, prefix: [cli], version: host.version }
   }
-  const bundledNpm = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
-  const npm = await present(bundledNpm) ? { executable: process.execPath, prefix: [bundledNpm] } : { executable: 'npm', prefix: [] }
-  const archiveDir = path.join(dshHome, 'plugin-packages')
+  const archiveDir = path.join(dshHome, 'third-party', 'archives')
   const archive = path.join(archiveDir, `${NAME}-${manifest.version}.tgz`)
   await safeFile(dshHome, archive)
   const archiveStat = await present(archive)
@@ -79,16 +77,17 @@ export async function buildPlan(options = {}) {
   }
   return { profile, dshHome, packageRoot, profileRoot, profileManifest, archiveDir, archive, npm, dsh, version: manifest.version,
     dependency: `file:${slash(path.relative(profileRoot, archive))}`, presets, testedDSHVersions: manifest.testedDSHVersions ?? [],
-    storeDir: options.storeDir ? path.resolve(options.storeDir) : undefined }
+    storeDir: options.storeDir ? path.resolve(options.storeDir) : await profileStoreDir(profileRoot, dshPackage) }
 }
 
 export function preview(plan) {
+  const storeFlags = plan.storeDir ? ['--store-dir', plan.storeDir] : []
   return { mode: 'dry-run', package: `${NAME}@${plan.version}`, profile: plan.profile, dshHome: plan.dshHome,
     archive: plan.archive, dependency: plan.dependency,
     commands: [
-      ['npm', 'pack', '--ignore-scripts', '--pack-destination', '<temporary directory under plugin-packages>', '--json'],
-      ['dsh', 'plugin', '--profile', plan.profile, 'add', plan.archive, ...FLAGS],
-      ['dsh', 'plugin', '--profile', plan.profile, 'install', '--lockfile-only', ...FLAGS],
+      ['npm', 'pack', '--ignore-scripts', '--pack-destination', '<temporary directory under third-party/archives>', '--json'],
+      ['dsh', 'plugin', '--profile', plan.profile, 'add', plan.archive, ...FLAGS, ...storeFlags],
+      ['dsh', 'plugin', '--profile', plan.profile, 'install', '--lockfile-only', ...FLAGS, ...storeFlags],
     ],
     manifestChange: { file: plan.profileManifest, dependency: NAME, value: plan.dependency },
     presets: plan.presets.map(({ target, action }) => ({ target, action })),
@@ -97,7 +96,7 @@ export function preview(plan) {
     testedDSHVersions: plan.testedDSHVersions, ...(plan.storeDir ? { storeDir: plan.storeDir } : {}) }
 }
 
-function cmdQuote(value) {
+export function cmdQuote(value) {
   if (/["%\r\n\0]/.test(value)) throw new Error('Windows command paths must not contain quotes, percent signs, or control characters')
   return `"${value}"`
 }

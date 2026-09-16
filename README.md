@@ -8,31 +8,33 @@ Release **0.1.3** targets the native contracts checked against **DSH 0.1.5-rc.2*
 
 ## Install
 
-Initialize a native DSH profile first and ensure Node, npm, pnpm and DSH are available. Clone or extract this repository, then run:
+Initialize a native DSH profile first and ensure Node, npm, pnpm and a global official DSH installation are available. Install the public npm release:
 
 ```sh
-node scripts/install.mjs --dry-run
-node scripts/install.mjs --apply
+npx --yes dsh-rigor-4@0.1.3 setup
 ```
 
-The default mode only previews. The installer packs the release with `npm pack --ignore-scripts`, forwards installation to `dsh plugin --profile web add`, asks native pnpm to refresh its lockfile, verifies package resolution, and copies four agent presets into `<DSH_HOME>/.agent-presets`. Existing customized files are preserved unless `--replace-presets` is explicitly passed.
+Add `--preview` to inspect the plan without changing DSH. The `setup` and `uninstall` commands apply by default. The installer packs the release with `npm pack --ignore-scripts`, retains it at `<DSH_HOME>/third-party/archives/dsh-rigor-4-0.1.3.tgz`, forwards installation to `dsh plugin --profile web add`, asks native pnpm to refresh its lockfile, verifies package resolution, and copies four agent presets into `<DSH_HOME>/.agent-presets`. Existing customized files are preserved unless `--replace-presets` is explicitly passed.
 
-The installer uses offline mode. Other dependencies already present in the target profile must be available locally; if pnpm reports missing cache entries, restore that profile's dependencies with the normal official DSH command before retrying. Installation never embeds credentials or relies on a developer's private directory. It preserves versioned release archives for rollback and does not promise a transaction across native package-manager operations.
+The GitHub tarball is an alternative: `npx --yes --package=https://github.com/lishize20040802-rgb/dsh-rigor-4/releases/download/v0.1.3/dsh-rigor-4-0.1.3.tgz dsh-rigor-4 setup`.
 
-Useful options are `--dsh-home PATH`, `--profile NAME`, `--dsh-package PATH` (the installed official package directory), and `--store-dir PATH`. The default home is the official `DSH_HOME` value or `~/.dsh`. `install.ps1` provides the same thin wrapper on Windows. Run `--help` for details.
+`npx` downloads the public release into npm's cache. The subsequent DSH installation uses offline mode with installation scripts and pnpmfile disabled. Other dependencies already present in the target profile must be available locally; if pnpm reports missing cache entries, restore that profile's dependencies with the normal official DSH command before retrying. Versioned archives are preserved; native package-manager operations do not provide a transaction for the entire profile.
+
+Useful options are `--dsh-home PATH`, `--profile NAME` (default `web`), `--dsh-package PATH`, and `--store-dir PATH`. The default home is `DSH_HOME` or `~/.dsh`. DSH is located through `npm root --global`, so an npx-local peer cannot be mistaken for the installed host; `--dsh-package` selects an explicit official installation. Both setup and uninstall read the existing profile's `node_modules/.modules.yaml` and forward its store as `--store-dir`; the explicit option overrides it. JSON metadata is read directly, and YAML uses the selected official DSH installation's parser.
+
+From a clone or extracted release, use `node scripts/cli.mjs setup`. The lower-level `node scripts/install.mjs` and Windows `./install.ps1` retain their preview default; pass `--apply` to execute. See [installation details](docs/installation.md).
 
 Restart DSH and select a Rigor preset in the agent selector. The package is activated by its agent preset rather than a global `dsh.bundle`; the official CLI warning that it is installed as a plain dependency is expected.
 
 ## Uninstall
 
-Finish active Rigor tasks and choose a built-in preset for new tasks. From the retained source or extracted release directory:
+Finish active Rigor tasks and choose a built-in preset for new tasks. Run:
 
 ```sh
-node scripts/uninstall.mjs --dry-run
-node scripts/uninstall.mjs --apply
+npx --yes dsh-rigor-4@0.1.3 uninstall
 ```
 
-The uninstaller forwards package removal to official `dsh plugin --profile NAME remove dsh-rigor-4`. Shared presets remain if another profile still depends on Rigor. Otherwise, it removes only preset files that exactly match this release. Customized presets stop the operation before removal; export and explicitly remove those definitions before retrying. Session state, credentials and release archives are preserved. Restart DSH and refresh the browser afterward.
+Add `--preview` for inspection; the GitHub tarball command also accepts `uninstall` in place of `setup`. From a retained release, `node scripts/cli.mjs uninstall` provides the same operation; `node scripts/uninstall.mjs --dry-run` / `--apply` remain available. Removal uses official `dsh plugin --profile NAME remove dsh-rigor-4 --config.ignore-pnpmfile=true`, adding the detected `--store-dir`. pnpm remove does not support `--offline`, `--ignore-scripts` or the `--ignore-pnpmfile` shorthand. Removal uses the explicit pnpmfile configuration key and omits the other two flags. Shared presets remain if another profile still depends on Rigor. Otherwise, only preset files matching this release are removed. Customized presets stop the operation before removal; export and explicitly remove those definitions before retrying. Session state, credentials and release archives are preserved. Restart DSH and refresh the browser afterward.
 
 ## Tools and presets
 

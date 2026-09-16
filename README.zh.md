@@ -8,18 +8,23 @@ Rigor-4 为官方 DSH agent 增加需求读法、计划、证据、子任务和�
 
 ## 安装
 
-先有可用的官方 DSH profile、npm 和 pnpm。在解压后的包目录运行：
+先有可用的官方 DSH profile、npm 和 pnpm，然后使用公开 npm 包安装：
 
 ```sh
-node scripts/install.mjs --dry-run
-node scripts/install.mjs --apply
+npx --yes dsh-rigor-4@0.1.3 setup
 ```
 
-默认只预览。`--dsh-home`、`--profile`、`--package-root` 可以指定位置；路径默认跟随原生 `DSH_HOME` / `~/.dsh`。Windows 可用薄包装 `./install.ps1`，参数相同。
+这个命令默认执行安装，加 `--preview` 只检查计划、不修改 DSH。`--dsh-home`、`--profile` 可以指定目标，默认使用原生 `DSH_HOME` / `~/.dsh` 和 `web` profile。先用官方 DSH 初始化 profile，并确保 Node、npm、pnpm 和全局安装的官方 DSH 可用。
 
-安装入口用 `npm pack --ignore-scripts` 生成 `<DSH_HOME>/plugin-packages/dsh-rigor-4-0.1.3.tgz`，交给官方 `dsh plugin --profile NAME add` 离线安装。它只把自身 dependency 归一化为相对 `file:` 路径，再让原生 pnpm 重新生成锁文件，并安装四种预设。已有定制预设默认保留。
+也可直接使用 GitHub 发布包：`npx --yes --package=https://github.com/lishize20040802-rgb/dsh-rigor-4/releases/download/v0.1.3/dsh-rigor-4-0.1.3.tgz dsh-rigor-4 setup`。
+
+`npx` 先将公开发布包下载到 npm 缓存。安装入口用 `npm pack --ignore-scripts` 生成 `<DSH_HOME>/third-party/archives/dsh-rigor-4-0.1.3.tgz`，交给官方 `dsh plugin --profile NAME add` 离线安装。它只把自身 dependency 归一化为相对 `file:` 路径，再让原生 pnpm 重新生成锁文件，并安装四种预设。已有定制预设默认保留。
 
 运行包和锁文件统一由官方 DSH/pnpm 管理；官方插件和 SDK 保持原位。安装入口不创建源码联接或额外运行副本。它禁用 lifecycle 和 pnpmfile，离线缓存缺失时停止。原生安装失败可能留下包管理器的部分更改，入口不会承诺自动回滚整个 profile。
+
+入口通过 `npm root --global` 定位真实的官方 DSH，不从 npx 临时 peer 解析宿主；非全局安装可以用 `--dsh-package PATH` 指向实际官方包。安装和卸载都会读取 profile 的 `node_modules/.modules.yaml`，以 `--store-dir` 转发原有存储目录；显式 `--store-dir PATH` 优先。JSON 元数据直接解析，YAML 使用所选官方 DSH 已安装的解析器，不增加运行依赖。
+
+源码或解压目录也可执行 `node scripts/cli.mjs setup`。底层 `node scripts/install.mjs` 和 Windows `./install.ps1` 仍默认预览，传 `--apply` 才执行。
 
 详见 [安装、预览与原生包管理](docs/installation.md)。日常继续使用官方 `dsh web`，在界面选择需要的 Rigor 预设。
 
@@ -82,14 +87,13 @@ npm pack --ignore-scripts
 
 ## 卸载
 
-先停止使用 Rigor 预设的活动任务，重启后选择官方预设作为新任务默认值。在保留的源码/解压目录运行：
+先结束使用 Rigor 预设的活动任务，选择官方预设作为新任务默认值，然后执行：
 
 ```sh
-node scripts/uninstall.mjs --dry-run
-node scripts/uninstall.mjs --apply
+npx --yes dsh-rigor-4@0.1.3 uninstall
 ```
 
-卸载器调用官方 `dsh plugin --profile NAME remove dsh-rigor-4`。其他 profile 仍使用 Rigor 时保留共享预设；否则只删除与当前发布内容完全相同的八个预设文件。发现定制预设时在任何卸载前停止，先导出并明确移除那些定制预设再重试。会话记录、凭据、旧发布包都保留，卸载不递归清理个人数据。随后重启 DSH 并刷新网页。
+加 `--preview` 可只查看计划；GitHub 发布包命令同样把末尾 `setup` 改为 `uninstall` 即可。保留的发布目录可运行 `node scripts/cli.mjs uninstall`，底层 `node scripts/uninstall.mjs --dry-run` / `--apply` 也仍可用。卸载器调用官方 `dsh plugin --profile NAME remove dsh-rigor-4 --config.ignore-pnpmfile=true`，并传入检测到的 `--store-dir`。pnpm remove 不支持 `--offline`、`--ignore-scripts` 和 `--ignore-pnpmfile` 简写，因此卸载使用 pnpmfile 的显式配置键，并省略前两个安装参数。其他 profile 仍使用 Rigor 时保留共享预设；否则只删除与当前发布内容完全相同的八个预设文件。发现定制预设时在任何卸载前停止，先导出并明确移除那些定制预设再重试。会话记录、凭据、旧发布包都保留，卸载不递归清理个人数据。随后重启 DSH 并刷新网页。
 
 ## 第三方归属
 

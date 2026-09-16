@@ -4,6 +4,7 @@
   "description": "Discipline for one thing: the delivery has to meet what the person meant, not only what they typed. A reading with unstated needs, a plan that serves them, children that attack and watch it, and an independent review whose approval says what the passing scripts do not prove.",
   "type": "module",
   "main": "src/index.js",
+  "bin": { "dsh-rigor-4": "scripts/cli.mjs" },
   "exports": {
     ".": "./src/index.js",
     "./model": "./src/model.js",

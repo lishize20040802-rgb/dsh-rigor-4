@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url'
 import { buildUninstallPlan, applyUninstallPlan, previewUninstall } from '../scripts/uninstall.mjs'
 
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rigor-uninstall-'))
-  t.after(async () => { assert.equal(path.dirname(root), os.tmpdir()); assert.ok(path.basename(root).startsWith('rigor-uninstall-')); await fs.rm(root, { recursive: true, force: true }) })
+  const temporaryRoot = await fs.realpath(os.tmpdir())
+  const root = await fs.mkdtemp(path.join(temporaryRoot, 'rigor-uninstall-'))
+  t.after(async () => { assert.equal(path.dirname(root), temporaryRoot); assert.ok(path.basename(root).startsWith('rigor-uninstall-')); await fs.rm(root, { recursive: true, force: true }) })
   const profile = path.join(root, 'profiles', 'web'), host = path.join(root, 'host')
   await fs.mkdir(profile, { recursive: true }); await fs.mkdir(path.join(host, 'lib'), { recursive: true })
   await fs.writeFile(path.join(host, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.5-rc.2' }))
@@ -23,7 +24,10 @@ async function fixture(t) {
   const run = async command => {
     calls++
     assert.equal(command.label, 'dsh plugin remove')
-    assert.ok(command.args.includes('--ignore-scripts'))
+    assert.equal(command.args.includes('--offline'), false)
+    assert.equal(command.args.includes('--ignore-scripts'), false)
+    assert.equal(command.args.includes('--ignore-pnpmfile'), false)
+    assert.ok(command.args.includes('--config.ignore-pnpmfile=true'))
     const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'))
     delete manifest.dependencies['dsh-rigor-4']
     await fs.writeFile(manifestFile, JSON.stringify(manifest))
@@ -69,4 +73,21 @@ test('native removal failure preserves every preset and user state', async t => 
   await assert.rejects(applyUninstallPlan(plan, { run: async () => { throw new Error('native failure') } }), /native failure/)
   for (const item of plan.presets) assert.deepEqual(await fs.readFile(item.target), item.bytes)
   assert.equal(await fs.readFile(f.state, 'utf8'), 'retained state')
+})
+
+test('uninstall detects the installed pnpm store and forwards only supported remove flags', async t => {
+  const f = await fixture(t), profileRoot = path.dirname(f.manifestFile), storeDir = path.join(f.root, 'existing store')
+  await fs.mkdir(path.join(profileRoot, 'node_modules'))
+  await fs.writeFile(path.join(profileRoot, 'node_modules', '.modules.yaml'), JSON.stringify({ storeDir: path.join(storeDir, 'v11') }))
+  const plan = await buildUninstallPlan(f.options), shown = previewUninstall(plan)
+  assert.deepEqual(shown.command.slice(-2), ['--store-dir', storeDir])
+  assert.equal(shown.command.includes('--offline'), false)
+  assert.equal(shown.command.includes('--ignore-scripts'), false)
+  assert.equal(shown.command.includes('--ignore-pnpmfile'), false)
+  assert.ok(shown.command.includes('--config.ignore-pnpmfile=true'))
+  await applyUninstallPlan(plan, { run: async command => {
+    assert.equal(command.args[command.args.indexOf('--store-dir') + 1], process.platform === 'win32' ? `"${storeDir}"` : storeDir)
+    return f.run(command)
+  } })
+  assert.equal(f.calls(), 1)
 })

@@ -54,7 +54,7 @@ partial 和 blocked 保存未完成任务。下一条“继续”仍在相同 ro
 
 运行时代码仅导入本包文件与 Node 内置模块。宿主服务由 ctx 注入，参数和输出使用宿主接受的标准 JSON Schema。安装包有自己的名称、状态目录和相对 profile 依赖，不导入旧代代码。
 
-发布包放在 <DSH_HOME>/plugin-packages，运行安装由原生 DSH/pnpm 管理到 profile 的 node_modules。安装薄入口默认预览；apply 后调用 npm pack 和官方 dsh plugin，再归一化自身的相对 file: 依赖。锁文件继续由原生包管理器生成；该薄入口不承诺原生安装整体回滚。详见 installation.md。
+发布归档放在 <DSH_HOME>/third-party/archives，运行安装由原生 DSH/pnpm 管理到 profile 的 node_modules。`dsh-rigor-4 setup` / `uninstall` 默认执行，`--preview` 只读检查；底层安装脚本仍默认预览。入口调用 npm pack 和官方 dsh plugin，归一化自身的相对 file: 依赖，并自动沿用目标 profile 的 pnpm store。宿主通过 npm 的全局目录定位，也可显式指定，不从 npx 临时 peer 解析。锁文件继续由原生包管理器生成；该薄入口不承诺原生安装整体回滚。详见 installation.md。
 
 当前契约核对基于 DSH 0.1.5-rc.2。原生源码显示 PTC 子调用经过同一工具流水线；自动测试与 SDK 验证不等同于完整真实模型任务验证。跨平台路径和 shell 预设已经分支，但其他操作系统仍需实际测试。
 
