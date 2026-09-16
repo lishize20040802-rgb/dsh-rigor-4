@@ -6,6 +6,17 @@ Rigor-4 adds explicit requirements, plans, evidence, child-agent briefs and inde
 
 Release **0.1.3** targets the native contracts checked against **DSH 0.1.5-rc.2**. There are no external npm runtime dependencies. Other DSH releases require renewed contract testing; the plugin does not claim compatibility with every future release.
 
+## What the plugin does
+
+Rigor-4 is for development or research tasks that need explicit acceptance criteria, delegation and review. It helps you trace why an agent took an action and which evidence supports its completion claims.
+
+- **Clarify requirements:** record the original request, explicit requirements, inferred needs and acceptance criteria so misunderstandings can be identified.
+- **Connect plans to evidence:** associate execution steps with requirements and retain observations, commands and artifact records for review.
+- **Organize delegation and independent review:** record responsibilities for exploration, review and monitoring agents, bind them to actual child tasks, and read conclusions from the review agent's own records.
+- **Report progress accurately:** check completion claims or retain partial and blocked work. Records are stored per session and survive restarts.
+
+After installation, choose `rigor-4` in DSH's agent selector for the standard preset. PTC, Cordis and minimal variants are also available; minimal has no subagents or independent review channel. The plugin organizes and checks work, but cannot guarantee that a model's interpretation or review judgment is correct.
+
 ## Install
 
 Initialize a native DSH profile first and ensure Node, npm, pnpm and a global official DSH installation are available. Install the public npm release:
