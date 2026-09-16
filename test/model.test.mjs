@@ -116,17 +116,21 @@ test('a late reading is a refusal that says what to do instead', () => {
   assert.ok(verdict.refusals.some(item => item.code === 'late-reading'))
 })
 
-test('the roles ladder is derived from the round, not declared', () => {
+test('step and file counts do not turn routine work into extra review rounds', () => {
   let round = prepared()
   assert.deepEqual({ scale: scaleOf(round), roles: requiredRoles(round) }, { scale: 2, roles: { scale: 2, reviews: 1, clarify: false, diverge: false, planReview: false, monitor: false } })
-  // Add distinct changed targets until the scale crosses the ladder.
+  // More targets are informational; they do not establish technical risk.
   for (const target of ['a.js', 'b.js', 'c.js']) round = recordEdit(round, { target, tool: 'edit', detail: target, at: 8 })
   const ladder = requiredRoles(round)
   assert.equal(ladder.scale, 5)
-  assert.equal(ladder.clarify, true)
-  assert.equal(ladder.diverge, true)
+  assert.equal(ladder.clarify, false)
+  assert.equal(ladder.diverge, false)
   assert.equal(ladder.planReview, false)
-  assert.equal(ladder.reviews, 2)
+  assert.equal(ladder.reviews, 1)
+  round = recordPlan(round, { ...round.plan, strategy: { risk: { impact: 'high', uncertainty: 'medium', reason: 'An external interface is changing.' } }, at: 9 }).round
+  assert.equal(requiredRoles(round).reviews, 2)
+  assert.equal(requiredRoles(round).planReview, true)
+  assert.equal(requiredRoles(round).diverge, true)
 })
 
 test('a preset without a child channel is not asked to use one, but must say so', () => {
@@ -149,11 +153,11 @@ test('a preset without a question channel is not asked to ask, but must say so',
   assert.ok(!verdict.refusals.some(item => item.code === 'unconfirmed-reading'))
 })
 
-test('with a question channel, larger work must have been put to the person', () => {
+test('larger work does not require another user confirmation solely because of its size', () => {
   let round = prepared()
   for (const target of ['a.js', 'b.js', 'c.js']) round = recordEdit(round, { target, tool: 'edit', detail: target, at: 8 })
   const verdict = evaluateDone(round, { perNeed: [{ id: 'N1', status: 'met' }], readingConfirmed: 'no', limitations: [], capabilities: { children: true, person: true } })
-  assert.ok(verdict.refusals.some(item => item.code === 'unconfirmed-reading'), JSON.stringify(verdict.refusals.map(item => item.code)))
+  assert.ok(!verdict.refusals.some(item => item.code === 'unconfirmed-reading'), JSON.stringify(verdict.refusals.map(item => item.code)))
 })
 
 test('saying the person confirmed it is checked against the recorded question and answer', () => {

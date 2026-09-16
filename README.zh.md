@@ -2,110 +2,102 @@
 
 [English](README.md) | 中文
 
-Rigor-4 为官方 DSH agent 增加需求读法、计划、证据、子任务和独立审阅记录。它挂在原生 preset、工具和 agent 事件上；会话、模型调用、工具执行和子代理仍由官方 DSH 负责。
+Rigor-4 帮助 agent 把请求变成可核查的交付：明确需求、比较方案、制定计划、收集证据，再进行独立审阅。它是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的独立社区插件；会话、模型调用、工具执行、审批和子代理仍由官方 DSH 负责。
 
-版本：**0.1.3**。已核对原生 DSH **0.1.5-rc.2**。运行时没有外部 npm 依赖。其他 DSH 版本需要重新验证接口契约。
+**发布版本：[0.2.0](https://github.com/lishize20040802-rgb/dsh-rigor-4/releases/tag/v0.2.0)。** 已核对原生 DSH **0.1.5-rc.2** 的接口契约，运行时没有外部 npm 依赖。
 
 ## 插件能做什么
 
-Rigor-4 适合需要明确验收标准、分工和复核的开发或研究任务，让你能追踪 agent 为什么这样做，以及完成声明有哪些证据支持。
+- **明确需求**：记录原始请求、明确需求、推测的隐含需求和验收条件，便于在交付前发现理解偏差。
+- **探索方案与技术**：比较不同实现方式，记录选择理由；核对所用技术的版本、资料来源和待执行的小实验，避免凭印象依赖接口。
+- **让计划对应实际工作**：把步骤关联到需求，记录依赖、完成条件和需要重新规划的情形。普通任务可以省略额外策略字段。
+- **检查可测量的结果**：把功能、集成、兼容性、交付或性能检查关联到实际命令与本地报告；性能检查可按预设阈值核对样本，例如 p95 延迟。
+- **按风险安排审阅**：为探索、审阅和监控子代理提供简报，绑定实际子任务，从审阅子代理自身记录中读取结论。不会仅因步骤变多就增加审阅或向用户提问。
+- **如实报告进度**：检查完成声明是否有当前证据支持，也支持保留部分完成或受阻状态。记录按会话保存，重启后仍可读取。
 
-- **明确需求**：记录原始请求、明确需求、推测的隐含需求和验收条件，便于发现理解偏差。
-- **关联计划与证据**：把执行步骤对应到需求，保存观察、命令和产物记录，供后续核对。
-- **组织子任务与独立审阅**：为探索、审阅和监控子代理记录职责，绑定实际子任务，并读取审阅子代理自身的结论。
-- **如实报告进度**：检查完成声明，也支持保留部分完成或受阻的任务状态；任务记录按会话保存，重启后仍可读取。
+例如优化一个接口时，可以先记录两种方案、框架版本、固定测试负载和延迟阈值。agent 通过 DSH 执行检查、关联报告，再请审阅者检查最终产物。Rigor 核对命令事实、文件哈希和提交的数值结果；实验是否真正证明需求得到满足，仍由审阅者判断。
 
-安装后，在 DSH 的 agent 选择器中选用 `rigor-4` 即可使用标准预设；也提供 PTC、Cordis 和 minimal 变体。minimal 不提供子代理和独立审阅通道。插件帮助组织和核查工作，不能保证模型的需求理解或审阅判断一定正确。
+## 0.2.0 新增能力
 
-## 安装
+现有工具新增可选策略，支持方案探索、带版本的技术调查、步骤依赖、重规划条件与声明式验收检查。审阅深度跟随 agent 声明的风险，风险判断本身也需要审查。完成前，每个声明检查必须针对当前工作通过，且审阅简报须晚于最新检查证据。
 
-先有可用的官方 DSH profile、npm 和 pnpm，然后使用公开 npm 包安装：
+详细策略说明通过 `rigor_plan({ strategy: "help" })` 按需获取，子任务收到对应角色简报。常驻纪律段与六工具的名称、描述和标准输入 schema 合计 UTF-8 体积，在相同统计口径下比 0.1.3 **约缩减 26%**。统计不含宿主提示、按需帮助/简报或运行事件，也不代表 token、延迟或模型能力提升。详细字段见 [策略与验收说明](docs/strategy.md)，本次变化见 [发布记录](CHANGELOG.md)。
+
+## 安装或升级
+
+先用官方 DSH 初始化目标 profile（运行配置），并确保 Node 20 或更高版本、npm 和 pnpm 可用；Node 同时须满足所用 DSH 版本的要求。然后执行：
 
 ```sh
-npx --yes dsh-rigor-4@0.1.3 setup
+npx --yes dsh-rigor-4@0.2.0 setup
 ```
 
-这个命令默认执行安装，加 `--preview` 只检查计划、不修改 DSH。`--dsh-home`、`--profile` 可以指定目标，默认使用原生 `DSH_HOME` / `~/.dsh` 和 `web` profile。先用官方 DSH 初始化 profile，并确保 Node、npm、pnpm 和全局安装的官方 DSH 可用。
+该命令安装或升级运行包，加 `--preview` 可预览计划。已有且内容不同的预设文件**默认保留**；如需采用本次发布的预设定义，先保存自己的定制，再显式执行：
 
-也可直接使用 GitHub 发布包：`npx --yes --package=https://github.com/lishize20040802-rgb/dsh-rigor-4/releases/download/v0.1.3/dsh-rigor-4-0.1.3.tgz dsh-rigor-4 setup`。
+```sh
+npx --yes dsh-rigor-4@0.2.0 setup --replace-presets
+```
 
-`npx` 先将公开发布包下载到 npm 缓存。安装入口用 `npm pack --ignore-scripts` 生成 `<DSH_HOME>/third-party/archives/dsh-rigor-4-0.1.3.tgz`，交给官方 `dsh plugin --profile NAME add` 离线安装。它只把自身 dependency 归一化为相对 `file:` 路径，再让原生 pnpm 重新生成锁文件，并安装四种预设。已有定制预设默认保留。
+升级前结束正在使用 Rigor 的任务。安装后重启 DSH、刷新网页，在 agent 选择器中选用 `rigor-4`；也提供 PTC、Cordis 和 minimal 变体。安装不会替你选择默认 agent 或修改模型路线。官方提示“按普通依赖安装”属于预期行为，插件通过所选 agent 预设挂载。
 
-运行包和锁文件统一由官方 DSH/pnpm 管理；官方插件和 SDK 保持原位。安装入口不创建源码联接或额外运行副本。它禁用 lifecycle 和 pnpmfile，离线缓存缺失时停止。原生安装失败可能留下包管理器的部分更改，入口不会承诺自动回滚整个 profile。
+也可以使用 GitHub 发布包：
 
-入口通过 `npm root --global` 定位真实的官方 DSH，不从 npx 临时 peer 解析宿主；非全局安装可以用 `--dsh-package PATH` 指向实际官方包。安装和卸载都会读取 profile 的 `node_modules/.modules.yaml`，以 `--store-dir` 转发原有存储目录；显式 `--store-dir PATH` 优先。JSON 元数据直接解析，YAML 使用所选官方 DSH 已安装的解析器，不增加运行依赖。
+```sh
+npx --yes --package=https://github.com/lishize20040802-rgb/dsh-rigor-4/releases/download/v0.2.0/dsh-rigor-4-0.2.0.tgz dsh-rigor-4 setup
+```
 
-源码或解压目录也可执行 `node scripts/cli.mjs setup`。底层 `node scripts/install.mjs` 和 Windows `./install.ps1` 仍默认预览，传 `--apply` 才执行。
+默认目标为 `DSH_HOME` / `~/.dsh` 下的 `web` profile；可用 `--dsh-home PATH`、`--profile NAME` 指定目标。入口通过 `npm root --global` 定位官方 DSH，非全局安装须传入 `--dsh-package PATH`。它自动沿用目标 profile 的 pnpm store，也接受显式 `--store-dir PATH`。
 
-详见 [安装、预览与原生包管理](docs/installation.md)。日常继续使用官方 `dsh web`，在界面选择需要的 Rigor 预设。
+`npx` 先将发布包下载到 npm 缓存。安装入口通过 `npm pack --ignore-scripts` 保留 `<DSH_HOME>/third-party/archives/dsh-rigor-4-0.2.0.tgz`，再交给官方 DSH/pnpm 离线安装，并禁用安装脚本和 pnpmfile。同 profile 的其他依赖须已在本地可用。原生包管理失败可能留下部分 profile 更改；版本归档会保留。详见 [安装、升级与故障处理](docs/installation.md)。
 
-## 六个工具
+源码或解压目录可以运行 `node scripts/cli.mjs setup`，安装该源码包自身的版本。底层 `node scripts/install.mjs` 和 Windows `./install.ps1` 默认预览，传 `--apply` 才执行。
+
+## 六个工具与四种预设
 
 | 工具 | 记录或核对的内容 |
 |---|---|
 | `rigor_read` | 原始请求、明确和隐含需求，以及可证伪的验收条件 |
-| `rigor_plan` | 计划步骤、关联需求和预期证据 |
+| `rigor_plan` | 步骤与需求的关联；按需声明策略、依赖和验收检查 |
 | `rigor_brief` | 子代理问题、职责及其所服务的需求 |
-| `rigor_evidence` | 本会话已记录的观察、命令或产物证据 |
+| `rigor_evidence` | 已记录的观察、命令或产物；核验声明检查的报告 |
 | `rigor_review` | 从已绑定审阅子代理自身日志读取结构化结论 |
 | `rigor_report` | 检查完成声明，或如实记录 partial / blocked |
 
-标准流程是记录读法和计划、执行与取证、安排独立审阅，再提交报告。子任务通过原生工具启动；Rigor 根据成功启动结果中的 child ID 绑定 brief，审阅必须对应已有绑定。
-
-记录使用 round、reading、plan 和 work revision 标记。`partial` / `blocked` 保留当前任务；完成后有新请求才开启新的 round。被拒绝的工具调用记录为 denied，不当作成功修改；执行失败但可能留下更改的情况单独记录。
-
-## 四种预设
-
-| 预设 | 原生基础 | 子代理 / 提问 |
+| 预设 | 原生基础 | 子代理 / 提问通道 |
 |---|---|---|
 | `rigor-4` | standard | 有 |
-| `rigor-4-ptc` | PTC，工具通过 `run_code` SDK 呈现 | 有 |
-| `rigor-4-cordis` | cordis，带运行时检查工具 | 有 |
+| `rigor-4-ptc` | PTC | 有 |
+| `rigor-4-cordis` | cordis | 有 |
 | `rigor-4-minimal` | minimal | 无；只注册可用的四个记录工具 |
 
-完整预设增加 explore、review、monitor 的子任务工具和角色说明。每个子代理继承父 agent 的原生 preset，再叠加角色约束和所选模型路线。角色门禁是插件逻辑，不能把提示词里的“只读”理解成操作系统沙箱保证；新增工具或执行入口需要同步验证分类。
+## 证据与持久状态
 
-minimal 的 persona 会覆盖普通 system prompt section，因此其预设内部保留精简纪律说明；没有独立审阅通道时，需要在完成报告中说明这一限制。
+每个会话使用独立状态文件：`<DSH_HOME>/.rigor4/sessions/<sha256(sessionId)>.json`。需求读法、计划和工作修订号防止旧证据或旧审阅直接证明新的交付。0.2.0 继续使用 format 2 / shape 2；旧会话保留原有记录，缺失的策略或检查字段不会自动变成“验证通过”。重启或释放 agent 不会删除记录。
 
-## 原生集成与边界
+计划与技术探针为执行和审阅提供依据，实际工作仍由 DSH 工具完成。报告的状态、环境、样本以及命令与被测文件之间的关系由报告作者提供；哈希和阈值核对无法证明命令确实加载了该文件，或样本能代表目标负载。证据和模型判断仍需审查，minimal 不提供独立审阅。
 
-- 一个 preset 的插件实例常驻，由同 preset 的多个 agent 共享；状态按 session ID 区分。工具和提示词注册保持原生 scope 隔离。
-- 工具 pre/execute/post/result、agent pre-step、turn-stopping、inbox claimed、session-start 和 disposed 构成集成边界。Rigor 不直接请求模型。
-- 当前 0.1.5-rc.2 的原生 PTC SDK 子调用在源码上明确经过同一 pre/post 工具流水线。该结论来自原生源码核对；测试结果不等同于真实 LLM 场景全部通过。
-- 证据存在不等于需求成立，审阅还要说明观察的适用范围；模型写出的隐含需求和审阅结论仍可能出错。
-- 原生工具名、事件形状、预设组合或返回结果改变时，需要重新验证。包记录 `testedDSHVersions`，不以通配 peer 依赖宣称支持所有未来版本。
+角色约束依赖有限的工具与命令分类。执行权限由 DSH 沙箱和审批策略负责；允许运行 shell 检查的审阅者仍可能执行有副作用的命令。其他 DSH 版本需要重新核对原生契约。集成细节见 [设计说明](docs/design.md)。
 
-## 持久状态
+## 卸载
 
-每个 session 使用独立文件：
+先结束使用 Rigor 的活动任务，为新任务选择官方预设，然后执行：
 
-```text
-<DSH_HOME>/.rigor4/sessions/<sha256(sessionId)>.json
+```sh
+npx --yes dsh-rigor-4@0.2.0 uninstall
 ```
 
-存储目录与安装入口使用相同的路径规则：去除 `DSH_HOME` 首尾空白；空值使用 `~/.dsh`；展开 `~`、`~/` 和 `~\`；相对路径在创建存储后端时解析成绝对路径。此前把 `~` 当作普通目录名、或随工作目录变化的相对存储路径已修正。
+加 `--preview` 可预览。GitHub 发布包命令同样把末尾 `setup` 改为 `uninstall`；源码安装可从对应版本的包目录运行 `node scripts/cli.mjs uninstall`。
 
-文件使用 format 2、revision 检查和独占文件锁更新。旧 `sessions.json` 只读回退，避免为迁移而覆盖旧记录。重启或 agent dispose 不会删除任务记录。发布包不携带状态、凭据或会话。
+卸载通过官方 DSH/pnpm 执行。其他 profile 仍依赖 Rigor 时保留共享预设；否则只删除与本次发布完全相同的预设文件。遇到定制预设会停止卸载，需先导出并明确移除这些定义后重试。会话记录、凭据和发布归档保留。完成后重启 DSH 并刷新网页。详见 [卸载与数据保留](docs/installation.md#卸载与数据保留)。
 
-## 验证与打包
+## 开发与验证
 
 ```sh
 node --test
 npm pack --ignore-scripts
 ```
 
-合成测试保留在 Git 仓库，安装和卸载入口随发布包提供；默认不需要 SDK。安装测试在临时 fixture 中验证零写入预览、原生命令转发、相对 dependency、预设保留、重复安装和失败边界。包管理器负责锁文件内容。原生验证范围见 [安装文档](docs/installation.md)。历史迁移脚本不属于发布和安装入口。
+合成测试覆盖策略解析、验收报告、审阅时序、持久化、提示体积预算和安装器失败行为，不调用真实模型，也不衡量 LLM 成功率或完整任务质量。按需帮助、工具结果和审阅子代理仍会占用上下文并可能增加模型轮次；常驻提示缩小不保证整项任务成本下降。打包只生成本地产物，不代表发布；发布包不携带测试、用户状态或凭据。
 
-## 卸载
+## 许可与归属
 
-先结束使用 Rigor 预设的活动任务，选择官方预设作为新任务默认值，然后执行：
-
-```sh
-npx --yes dsh-rigor-4@0.1.3 uninstall
-```
-
-加 `--preview` 可只查看计划；GitHub 发布包命令同样把末尾 `setup` 改为 `uninstall` 即可。保留的发布目录可运行 `node scripts/cli.mjs uninstall`，底层 `node scripts/uninstall.mjs --dry-run` / `--apply` 也仍可用。卸载器调用官方 `dsh plugin --profile NAME remove dsh-rigor-4 --config.ignore-pnpmfile=true`，并传入检测到的 `--store-dir`。pnpm remove 不支持 `--offline`、`--ignore-scripts` 和 `--ignore-pnpmfile` 简写，因此卸载使用 pnpmfile 的显式配置键，并省略前两个安装参数。其他 profile 仍使用 Rigor 时保留共享预设；否则只删除与当前发布内容完全相同的八个预设文件。发现定制预设时在任何卸载前停止，先导出并明确移除那些定制预设再重试。会话记录、凭据、旧发布包都保留，卸载不递归清理个人数据。随后重启 DSH 并刷新网页。
-
-## 第三方归属
-
-四种预设改编自 DeepSeek Harness 0.1.5-rc.2 的 MIT 许可预设；原许可保留在 [LICENSE-DeepSeek](LICENSE-DeepSeek)。插件本身采用 [MIT](LICENSE)。
+插件采用 [MIT](LICENSE) 许可。四种预设改编自 DeepSeek Harness 0.1.5-rc.2，其原始 MIT 许可保留在 [LICENSE-DeepSeek](LICENSE-DeepSeek)。

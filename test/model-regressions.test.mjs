@@ -93,10 +93,24 @@ test('relinking externally changed artifact content advances the reviewed work r
   assert.ok(sameSnapshot(changed.evidence.at(-1).snapshot, snapshotOf(changed)))
 })
 
+test('new acceptance evidence permits reopening the same review question without a duplicate-brief loop', () => {
+  const prior = brief(base(), 'early-reviewer')
+  const question = prior.round.briefs.find(item => item.id === prior.id).question
+  const changed = linkEvidence(prior.round, {
+    need: 'N1', check: 'C1', validation: { status: 'passed' },
+    fact: { kind: 'artifact', ref: 'artifact:report.json', path: 'report.json', fingerprint: 'report-hash' }, at: 7,
+  })
+  const oldReview = recordReview(changed, { briefId: prior.id, childId: 'early-reviewer', payload, at: 8 })
+  assert.equal(oldReview.refusal.code, 'stale-review-evidence')
+  const reopened = openBrief(changed, { role: 'review', question, serves: ['N1'], at: 9 })
+  assert.ok(reopened.brief, JSON.stringify(reopened))
+  assert.notEqual(reopened.brief.id, prior.id)
+})
+
 test('independent review counts only approvals of the current snapshot', () => {
   let round = approve(base(), 'old-child')
   round = recordReading(round, reading).round
-  round = recordPlan(round, { ...plan, steps: [1, 2, 3, 4].map(n => ({ text: `step ${n}`, serves: ['N1'], evidence: 'read A' })) }).round
+  round = recordPlan(round, { ...plan, strategy: { risk: { impact: 'high', uncertainty: 'low', reason: 'Public compatibility changes.' } }, steps: [1, 2, 3, 4].map(n => ({ text: `step ${n}`, serves: ['N1'], evidence: 'read A' })) }).round
   round = linkEvidence(round, { need: 'N1', fact: { kind: 'artifact', path: 'A', ref: 'artifact:A', fingerprint: 'before' }, at: 8 })
   round = approve(round, 'current-child')
   const outcome = evaluateDone(round, { ...opts, capabilities: { children: true, person: false }, limitations: ['question channel unavailable'] })
@@ -112,11 +126,11 @@ test('preparation roles can cause the reading they are required to help form', (
     round = closeBriefConclusion(b.round, { briefId: b.id, conclusion: 'retain A; clarify its lifetime', at: 1 })
   }
   round = recordReading(round, reading).round
-  round = recordPlan(round, { ...plan, steps: [1, 2, 3, 4].map(n => ({ text: `step ${n}`, serves: ['N1'], evidence: 'read A' })) }).round
+  round = recordPlan(round, { ...plan, strategy: { risk: { impact: 'low', uncertainty: 'medium', reason: 'Retention requirements need investigation.' } }, steps: [1, 2, 3, 4].map(n => ({ text: `step ${n}`, serves: ['N1'], evidence: 'read A' })) }).round
   const outcome = evaluateDone(round, opts)
   assert.ok(!outcome.refusals.some(item => ['no-clarify', 'no-diverge'].includes(item.code)))
   const newRequest = recordRequest(round, { text: 'actually remove A', at: 9 })
-  assert.ok(evaluateDone(newRequest, opts).refusals.some(item => item.code === 'no-clarify'))
+  assert.ok(evaluateDone(newRequest, opts).refusals.some(item => item.code === 'no-diverge'))
 })
 
 test('partial and blocked reports preserve the round on continuation; done and explicit new tasks archive', () => {

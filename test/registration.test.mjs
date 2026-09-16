@@ -35,3 +35,25 @@ test('new unsupported schema keywords fail explicitly instead of weakening valid
   assert.throws(() => parameterSchema({ value: { type: 'object' } }), /Unsupported/)
   assert.throws(() => parameterSchema({ value: { type: 'string', pattern: 'x' } }), /Unsupported/)
 })
+
+test('host schemas omit unsupported length keywords while execution still enforces bounds', async () => {
+  let calls = 0
+  const tool = registerableTool({ name: 'bounded', parameters: {
+    text: { type: 'string', required: true, minLength: 2, maxLength: 4 },
+  }, execute(args) { calls++; return args.text } })
+  assert.equal(Object.hasOwn(tool.parameters.properties.text, 'minLength'), false)
+  assert.equal(Object.hasOwn(tool.parameters.properties.text, 'maxLength'), false)
+  await assert.rejects(tool.execute({ text: 'x' }, {}), /too short/)
+  await assert.rejects(tool.execute({ text: '12345' }, {}), /too long/)
+  assert.equal(calls, 0)
+  assert.equal(await tool.execute({ text: '1234' }, {}), '1234')
+  assert.equal(calls, 1)
+  assert.throws(() => parameterSchema({ text: { type: 'string', maxLength: -1 } }), /Invalid parameter bound/)
+  assert.throws(() => parameterSchema({ text: { type: 'string', minLength: 4, maxLength: 2 } }), /Invalid parameter bounds/)
+})
+
+test('oversized strategy input cannot reach the plan implementation', async () => {
+  const unavailable = () => { throw new Error('session state must not be accessed') }
+  const plan = createTools({ sessionFor: unavailable, save: unavailable }).map(registerableTool).find(tool => tool.name === 'rigor_plan')
+  await assert.rejects(plan.execute({ strategy: 'x'.repeat(40001) }, {}), /strategy is too long/)
+})

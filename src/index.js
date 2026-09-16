@@ -20,7 +20,7 @@
 //      generation, and never deleted on dispose. Restarting is not an exit and not an
 //      erasure: a reading, a plan and a review all survive it on purpose.
 
-import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 
@@ -46,6 +46,7 @@ import {
   fingerprintOf,
   sameSnapshot,
   snapshotOf,
+  ROLES,
 } from './model.js'
 import { lastAssistantText, sessionTail } from './children.js'
 import { DISCIPLINE_SECTION } from './prompt.js'
@@ -219,18 +220,27 @@ export function apply(ctx, options) {
     }
     return loaded().get(id) ?? createRound(Date.now())
   }
-  const stat = (path, agent) => {
+  const stat = (path, agent, options = {}) => {
     let fd
     try {
       const cwd = agent?.session?.header?.cwd ?? process.cwd()
       const absolute = realpathSync(resolve(cwd, String(path)))
       const info = statSync(absolute)
       if (!info.isFile()) return { exists: true, path: absolute, isFile: false, size: info.size, mtimeMs: info.mtimeMs }
+      if (Number.isFinite(options.maxBytes) && info.size > options.maxBytes) return { exists: true, path: absolute, isFile: true, size: info.size, tooLarge: true }
       const hash = createHash('sha256')
       const buffer = Buffer.allocUnsafe(64 * 1024)
       fd = openSync(absolute, 'r')
+      const opened = fstatSync(fd)
+      if (!opened.isFile()) return { exists: true, path: absolute, isFile: false }
+      if (Number.isFinite(options.maxBytes) && opened.size > options.maxBytes) return { exists: true, path: absolute, isFile: true, size: opened.size, tooLarge: true }
       let count
-      while ((count = readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, count))
+      let bytesRead = 0
+      while ((count = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+        bytesRead += count
+        if (Number.isFinite(options.maxBytes) && bytesRead > options.maxBytes) return { exists: true, path: absolute, isFile: true, size: bytesRead, tooLarge: true }
+        hash.update(buffer.subarray(0, count))
+      }
       const after = statSync(absolute)
       if (info.size !== after.size || info.mtimeMs !== after.mtimeMs) return { exists: false, path: absolute, changedDuringRead: true }
       return { exists: true, path: absolute, isFile: true, size: info.size, mtimeMs: info.mtimeMs, fingerprint: `sha256:${hash.digest('hex')}` }
@@ -239,6 +249,25 @@ export function apply(ctx, options) {
     } finally {
       if (fd !== undefined) closeSync(fd)
     }
+  }
+
+  const readArtifact = (path, agent) => {
+    const cwd = agent?.session?.header?.cwd ?? process.cwd()
+    const absolute = realpathSync(resolve(cwd, String(path)))
+    const fd = openSync(absolute, 'r')
+    try {
+      const before = fstatSync(fd)
+      const limit = 256 * 1024
+      if (!before.isFile() || before.size > limit) throw new Error('Validation report is not a bounded regular file.')
+      const buffer = Buffer.allocUnsafe(limit + 1)
+      let size = 0
+      let count
+      while (size <= limit && (count = readSync(fd, buffer, size, buffer.length - size, null)) > 0) size += count
+      const after = fstatSync(fd)
+      if (size > limit || before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('Validation report changed during reading.')
+      const bytes = buffer.subarray(0, size)
+      return { data: JSON.parse(bytes.toString('utf8')), fingerprint: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
+    } finally { closeSync(fd) }
   }
 
   const listChildrenOf = async agent => {
@@ -295,6 +324,7 @@ export function apply(ctx, options) {
     save: (agent, round) => persist(agent.id, round),
     now: () => Date.now(),
     stat,
+    readArtifact,
     capabilities,
     listChildren: agent => listChildrenOf(agent),
     readSession,
@@ -759,7 +789,7 @@ export function apply(ctx, options) {
     const found = /#\s*Brief:\s*([a-z-]+)/i.exec(source)
     if (found === null) return null
     const role = found[1].toLowerCase()
-    if (!['clarify', 'diverge', 'plan-review', 'monitor', 'review', 'rework-check'].includes(role)) return null
+    if (!ROLES.includes(role)) return null
     const tool = /Start this child with the ([a-z_]+)/i.exec(source)
     return { role, tool: tool === null ? '' : tool[1] }
   }

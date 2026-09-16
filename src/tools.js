@@ -23,6 +23,7 @@
 // busy, and the three earlier builds both grew one and both learned this the same way.
 
 import {
+  briefIsCurrent,
   evaluateDone,
   linkEvidence,
   normalizeTarget,
@@ -40,6 +41,9 @@ import { renderBrief } from './briefs.js'
 import { extractReviewPayload, validateReviewPayload } from './payload.js'
 import { toolForRole } from './classify.js'
 import { lastAssistantText, sessionTail } from './children.js'
+import { parseStrategy } from './strategy.js'
+import { STRATEGY_HELP } from './strategy-help.js'
+import { checkTemplate, validateCheckReport, verifyArtifacts } from './validation.js'
 
 const JSON_OUTPUT = {
   schema: { type: 'object', additionalProperties: true, properties: {} },
@@ -60,11 +64,11 @@ function toolText(deps) {
   return {
     solo,
     reportDescription: solo
-      ? 'The account. status="done" claims the delivery meets the reading; it is REFUSED before it is recorded unless the reading exists and is not late, the plan serves every need, every need has a linked fact, and this preset\'s limitations are declared (this preset has no independent-review channel, so no review can happen here). status="partial" or "blocked" is always recordable and must name the gaps — an honest partial answer is a complete answer. per_need maps each need to met/not-met/not-checked, as "N1 met | N2 not-checked".'
-      : 'The account. status="done" claims the delivery meets the reading; it is REFUSED before it is recorded unless the reading exists and is not late, the plan serves every need, the owed children reported, the newest review approved with every need met, every need has a linked fact, no rework is open, and the reading was confirmed by the person for larger work. status="partial" or "blocked" is always recordable and must name the gaps — an honest partial answer is a complete answer. per_need maps each need to met/not-met/not-checked, as "N1 met | N2 not-checked".',
+      ? 'Record done/partial/blocked. Done requires current needs, plan, evidence, declared acceptance checks and capability limitations. This preset has no independent-review channel. Partial/blocked must name remaining gaps.'
+      : 'Record done/partial/blocked. Done requires current needs, plan, evidence, passing declared checks, risk-appropriate independent review and closed rework. Partial/blocked must name gaps. Task size alone never requires another user confirmation.',
     evidenceDescription: solo
-      ? 'Tie a fact this session actually recorded to the need it speaks for. ref must name a recorded fact: "#123" (a sequence number from this session), "cmd:<fragment>" (a command that ran), "read:<path>" (a file that was read), or "artifact:<path>" (a file that exists now). The plugin verifies the fact exists — you cannot assert one. Every need needs at least one before a done claim, and whether a fact shows the need is met is judged by whoever reads the report.'
-      : 'Tie a fact this session actually recorded to the need it speaks for. ref must name a recorded fact: "#123" (a sequence number from this session), "cmd:<fragment>" (a command that ran), "read:<path>" (a file that was read), or "artifact:<path>" (a file that exists now). The plugin verifies the fact exists — you cannot assert one — and the reviewer decides whether it shows the need is met. Every need needs at least one before a done claim.',
+      ? 'Link an observed command/read/file to needs. Every need requires current evidence; a passing command alone does not prove acceptance. For a declared check, link its JSON report and actual run.'
+      : 'Link an observed command/read/file to needs. Every need requires current evidence; the independent reviewer judges relevance. For a declared check, link its JSON report and actual run.',
     readNext: solo
       ? 'Plan against these needs (rigor_plan), then link what you actually find to them (rigor_evidence) and report honestly (rigor_report).'
       : 'Plan against these needs (rigor_plan), then give the work voices (rigor_brief).',
@@ -181,7 +185,7 @@ export function createReadTool(deps) {
   const T = toolText(deps)
   return {
     name: 'rigor_read',
-    description: 'Record what the person asked for, and the needs behind it that they never typed. `literal` is their request in one sentence. `needs` is "kind: need => test", separated by " | ": kind is "stated" for something they actually said and "implicit" for a default, convention, boundary or outcome they assumed you already know; after "=>" write what you would SEE if it is met, or if you have it wrong. Implicit needs are the point — nobody says "the old logs must still be recoverable" or "do not touch the production config", and those are exactly where a delivery ends up not wanted. Calling this again records a revision of the reading (which is honest and tracked), not a silent rewrite.',
+    description: 'Record the request and observable acceptance needs before editing. Distinguish stated requirements from justified implicit expectations; keep scope and existing authorization. Calling again versions the reading and invalidates its old plan/reviews.',
     parameters: {
       literal: { type: 'string', required: true, description: 'What was asked for, in one sentence, in their words.' },
       needs: { type: 'string', required: true, description: 'Needs as "stated: ... => ... | implicit: ... => ...". At least one; a real request usually carries at least one implicit one.' },
@@ -230,14 +234,16 @@ export function createPlanTool(deps) {
   const T = toolText(deps)
   return {
     name: 'rigor_plan',
-    description: 'Record the plan: steps, each naming the needs it serves and the evidence that will show it worked, as "text => serves N1,N2 => evidence". A step serving nothing is work nobody asked for; a need served by nothing is a promise the plan does not keep — the second is checked again when you claim done. `approach` says in a sentence how the delivery will meet the needs.',
+    description: 'Plan steps against needs and evidence. Use optional strategy for consequential or uncertain work: risk, alternatives, technology, dependencies and acceptance checks. strategy="help" returns details without changing state. Replanning invalidates old reviews.',
     parameters: {
-      approach: { type: 'string', required: true, description: 'How the delivery will meet the needs, in one or two sentences. Not a list of files — the idea that makes the needs true.' },
-      steps: { type: 'string', required: true, description: 'Steps as "text => serves N1,N2 => evidence", separated by " | ". The evidence is what you will run, read or produce to show the step landed.' },
+      approach: { type: 'string', description: 'Required except for help: how the approach meets the needs.' },
+      steps: { type: 'string', description: 'Required except for help: "text => serves N1,N2 => evidence", separated by " | ". IDs are S1, S2, etc.' },
       risks: { type: 'string', description: 'What could make this approach wrong or incomplete, separated by " | ".' },
+      strategy: { type: 'string', maxLength: 40000, description: 'Optional JSON; "help" gives its schema and examples. Omission preserves an existing strategy when replanning.' },
     },
     output: JSON_OUTPUT,
     execute(args, exec) {
+      if (text(args.strategy) === 'help') return { recorded: false, help: STRATEGY_HELP }
       const round = deps.sessionFor(exec.agent)
       if (round.reading === null) return { recorded: false, refused: 'record the reading first (rigor_read): a plan that does not know the needs cannot show it serves them.' }
       const parsed = parseSteps(args.steps)
@@ -251,10 +257,15 @@ export function createPlanTool(deps) {
       }
       const approach = text(args.approach)
       if (approach === '') return { recorded: false, refused: '`approach` is required: one sentence on how the needs will be met.' }
+      const strategy = parseStrategy(text(args.strategy) === '' ? round.plan?.strategy : args.strategy, {
+        needIds: [...needIds], stepIds: parsed.items.map((_item, index) => `S${index + 1}`),
+      })
+      if (strategy.errors.length > 0) return { recorded: false, refused: 'Invalid strategy; nothing changed.', errors: strategy.errors }
       const outcome = recordPlan(round, {
         approach,
         steps: parsed.items,
         risks: splitPipe(args.risks),
+        strategy: strategy.value,
         at: deps.now(),
       })
       deps.save(exec.agent, outcome.round)
@@ -267,6 +278,11 @@ export function createPlanTool(deps) {
         unserved_needs: unserved,
         unserved_note: unserved.length === 0 ? '' : `these needs are served by no step: ${unserved.join(', ')} — a done claim will be refused until they are, or until the reading says they are out of scope.`,
         refused: parsed.refused,
+        ...(strategy.value === null ? {} : {
+          risk: strategy.value.risk,
+          checks: strategy.value.checks.map(item => ({ id: item.id, need: item.need, criterion: item.criterion, ...(item.metric ? { metric: item.metric } : {}) })),
+          validation_report: strategy.value.checks.length ? checkTemplate(strategy.value.checks[0]) : undefined,
+        }),
         next: T.planNext,
       }
     },
@@ -276,9 +292,9 @@ export function createPlanTool(deps) {
 export function createBriefTool(deps) {
   return {
     name: 'rigor_brief',
-    description: 'Open a brief for a child session and get back the complete text to hand it. Roles: "clarify" draws out what the person left unsaid; "diverge" attacks the reading before it hardens; "plan-review" attacks the plan; "monitor" watches execution for drift; "review" judges whether the delivery meets the needs; "rework-check" verifies demanded fixes. The result says which roles this round owes at its size. The plugin refuses duplicate questions and briefs that serve nothing, and a spawn that matches no open brief is refused at the tool gate — a child nobody briefed is an opinion nobody asked for.',
+    description: 'Generate a focused child brief. clarify/diverge examine intent; explore compares solutions; technical investigates versioned capabilities; plan-review checks feasibility; monitor watches execution; review/rework-check judge delivery. Dispatch using the returned tool; detailed instructions are loaded only for that role.',
     parameters: {
-      role: { type: 'string', required: true, enum: ['clarify', 'diverge', 'plan-review', 'monitor', 'review', 'rework-check'], description: 'Which child this is. clarify/diverge are owed from scale 5, plan-review from 10, monitor when a background job runs, review always before a done claim.' },
+      role: { type: 'string', required: true, enum: ['clarify', 'diverge', 'explore', 'technical', 'plan-review', 'monitor', 'review', 'rework-check'], description: 'Choose the role needed for this question. Risk selects required reviews; exploration is optional.' },
       question: { type: 'string', required: true, description: 'The one question this child must answer, in at least 40 characters. It is what the spawn gate matches against, and what a duplicate is detected by.' },
       serves: { type: 'string', description: 'Which need (N1) or plan step (S1) this child serves, comma separated. A brief that serves nothing is a spawn nobody can hold to anything.' },
     },
@@ -329,6 +345,8 @@ export function createEvidenceTool(deps) {
       needs: { type: 'string', required: true, description: 'One or more need ids: "N1" or "N1,N2".' },
       ref: { type: 'string', required: true, description: '"#<seq>", "cmd:<fragment>", "read:<path>" or "artifact:<path>".' },
       note: { type: 'string', description: T.evidenceNoteHint },
+      check: { type: 'string', description: 'Optional declared check ID. Requires artifact:<JSON report> and run.' },
+      run: { type: 'string', description: 'For a check: #seq or cmd:fragment identifying its actual validation command, run after the plan.' },
     },
     output: JSON_OUTPUT,
     execute(args, exec) {
@@ -339,15 +357,30 @@ export function createEvidenceTool(deps) {
       const unknown = ids.filter(id => !known.has(id))
       if (ids.length === 0) return { recorded: false, refused: '`needs` is required: which need does this fact speak for?' }
       if (unknown.length > 0) return { recorded: false, refused: `no such need: ${unknown.join(', ')}. This reading has ${[...known].join(', ')}.` }
-      const resolved = resolveRef(round, String(args.ref ?? '').trim(), deps, exec.agent)
+      const checkId = text(args.check)
+      const resolved = resolveRef(round, String(args.ref ?? '').trim(), deps, exec.agent, checkId === '' ? {} : { maxBytes: 262144 })
       if (resolved.refusal !== undefined) return { recorded: false, refused: resolved.refusal }
+      let validation = null
+      if (checkId !== '') {
+        const check = (round.plan?.strategy?.checks ?? []).find(item => item.id === checkId)
+        if (!check) return { recorded: false, refused: `Check ${checkId} is not declared in the current plan.` }
+        if (ids.length !== 1 || ids[0] !== check.need) return { recorded: false, refused: `Check ${checkId} belongs to ${check.need}; link that need only.` }
+        const run = resolveRef(round, text(args.run), deps, exec.agent)
+        if (run.refusal) return { recorded: false, refused: run.refusal, template: checkTemplate(check) }
+        const checked = validateCheckReport({ check, fact: resolved.fact, runFact: run.fact, round, deps, agent: exec.agent })
+        if (checked.refusal) return { recorded: false, refused: checked.refusal, template: checkTemplate(check) }
+        validation = checked.validation
+      } else if (text(args.run) !== '') {
+        return { recorded: false, refused: 'run is used with a declared check; otherwise link the command directly as ref.' }
+      }
       let next = round
-      for (const id of ids) next = linkEvidence(next, { need: id, fact: resolved.fact, note: text(args.note), at: deps.now() })
+      for (const id of ids) next = linkEvidence(next, { need: id, fact: resolved.fact, note: text(args.note), check: checkId, validation, at: deps.now() })
       deps.save(exec.agent, next)
       return {
         recorded: true,
         linked: ids.map(id => `${id} ← ${resolved.fact.kind}:${resolved.fact.ref}`),
         note: T.evidenceNote,
+        ...(validation === null ? {} : { check: checkId, validation }),
       }
     },
   }
@@ -360,7 +393,7 @@ export function createEvidenceTool(deps) {
  * and assertion, and it is also why the error message names what IS available: a
  * refusal a caller cannot act on is a wall, not a gate.
  */
-export function resolveRef(round, ref, deps, agent) {
+export function resolveRef(round, ref, deps, agent, options = {}) {
   if (ref === '') return { refusal: '`ref` is required: "#<seq>", "cmd:<fragment>", "read:<path>" or "artifact:<path>".' }
   const facts = round.facts ?? { edits: [], commands: [], reads: [] }
   const current = snapshotOf(round)
@@ -407,7 +440,8 @@ export function resolveRef(round, ref, deps, agent) {
   if (kind === 'artifact') {
     if (rest === '') return { refusal: 'artifact: needs a non-empty file path.' }
     let info
-    try { info = deps.stat(rest, agent) } catch { return { refusal: `the artifact "${rest}" could not be inspected. Retry its verification before linking it.` } }
+    try { info = deps.stat(rest, agent, options) } catch { return { refusal: `the artifact "${rest}" could not be inspected. Retry its verification before linking it.` } }
+    if (info?.tooLarge === true) return { refusal: `the validation report exceeds ${options.maxBytes} bytes; keep large logs outside the report.` }
     if (info?.changedDuringRead === true) return { refusal: `the artifact "${rest}" changed during inspection. Wait for its writer to finish and verify it again.` }
     if (info == null || info.exists !== true) return { refusal: `the artifact "${rest}" does not exist. An artifact link is a fact about the tree; name a path that is actually there.` }
     if (info.isFile === false) return { refusal: `the artifact "${rest}" is not a regular file. Name the actual file to be checked.` }
@@ -420,7 +454,7 @@ export function resolveRef(round, ref, deps, agent) {
 export function createReviewTool(deps) {
   return {
     name: 'rigor_review',
-    description: 'Link a finished child\'s review. The plugin reads the child\'s OWN session log and takes the final JSON verdict block. The child must be a registered direct child bound to an existing claimed review/rework-check brief for the current reading, plan and delivery. An approval must have every need met, the reading confirmed, no demanded rework, and a sentence about what passing scripts do NOT prove. A valid rework verdict opens the demanded fixes; malformed or mismatched verdicts are refused.',
+    description: 'Import the final verdict from a finished direct child\'s own log. Its claimed review/rework-check brief must match this delivery. Approval requires all needs met and explains evidence limits; rework opens tracked fixes.',
     parameters: {
       child: { type: 'string', description: 'The child session id the spawn returned. Leave empty to use the newest finished child this session has not reviewed yet.' },
       brief: { type: 'string', description: 'An existing claimed brief id bound to this child, when disambiguation is needed. It cannot override the child, role or version binding.' },
@@ -508,7 +542,7 @@ function reviewBriefProblem(round, brief, child, role) {
   if (brief.state !== 'claimed') return `brief ${brief.id} is not awaiting a claimed child's review; it cannot be linked again.`
   if (brief.childId === '' || String(brief.childId) !== child) return `brief ${brief.id} is not bound to child ${child}. Wait for a successful spawn to bind its actual child id.`
   if (brief.role !== role) return `brief ${brief.id} has role ${brief.role}, not ${role}. Link it with its actual role.`
-  if (!sameSnapshot(brief.snapshot, snapshotOf(round))) return `brief ${brief.id} is stale: the reading, plan or delivery changed. Open a fresh review brief for the current version.`
+  if (!briefIsCurrent(round, brief)) return `brief ${brief.id} is stale: the reading, plan, delivery or acceptance evidence changed. Open a fresh review brief for the current version.`
   if ((round.reviews ?? []).some(item => String(item.childId) === child && sameSnapshot(item.snapshot, brief.snapshot))) return `child ${child} already has a review for this version. Independent reviews require a different child.`
   return ''
 }
@@ -602,16 +636,12 @@ export function createReportTool(deps) {
         }
         // A file can change outside the observed tool stream. Check the actual
         // artifact just before accepting a completion claim, not only at linking.
-        for (const evidence of (round.evidence ?? []).filter(item => item.kind === 'artifact' && sameSnapshot(item.snapshot, snapshotOf(round)))) {
-          let info
-          try { info = deps.stat(evidence.path, exec.agent) } catch { info = null }
-          if (info?.exists !== true || info.isFile === false || info.changedDuringRead === true
-            || (evidence.fingerprint !== '' && evidence.fingerprint !== undefined && info.fingerprint !== evidence.fingerprint)) {
-            return {
-              recorded: false,
-              refused: `artifact "${evidence.path}" changed, disappeared or could not be verified since its evidence was linked. Inspect and relink it, then obtain a review of the current delivery.`,
-              code: 'stale-artifact',
-            }
+        const artifacts = verifyArtifacts((round.evidence ?? []).filter(item => sameSnapshot(item.snapshot, snapshotOf(round))), deps, exec.agent)
+        if (!artifacts.ok) {
+          return {
+            recorded: false,
+            refused: `artifact "${artifacts.path}" changed, disappeared or could not be verified since its evidence was linked. Inspect and relink it, then obtain a review of the current delivery.`,
+            code: 'stale-artifact',
           }
         }
       }

@@ -45,6 +45,12 @@ function bool(value) {
   return value === true
 }
 
+// These optional records are validated by the domain module. Keep their JSON
+// structure across reloads without introducing defaults into older format-2 data.
+function optionalObject(value, key) {
+  return plain(value[key]) ? { [key]: structuredClone(value[key]) } : {}
+}
+
 function readSnapshot(value) {
   if (!plain(value) || str(value.roundId) === '') return null
   return { roundId: value.roundId, readingVersion: num(value.readingVersion), planVersion: num(value.planVersion), workRevision: num(value.workRevision) }
@@ -102,6 +108,7 @@ function readPlan(value) {
       evidence: str(item.evidence),
     })),
     risks: list(value.risks).map(item => str(item)).filter(item => item !== ''),
+    ...optionalObject(value, 'strategy'),
   }
 }
 
@@ -183,6 +190,8 @@ export function adopt(value, { sessionId = '' } = {}) {
       seq: num(item.seq), at: num(item.at), need: str(item.need), kind: str(item.kind), ref: str(item.ref), seqOfFact: num(item.seqOfFact), path: str(item.path), note: str(item.note),
       size: Number.isFinite(item.size) ? item.size : null, mtimeMs: Number.isFinite(item.mtimeMs) ? item.mtimeMs : null, fingerprint: str(item.fingerprint),
       snapshot: readSnapshot(item.snapshot), factSnapshot: readSnapshot(item.factSnapshot),
+      ...(typeof item.check === 'string' ? { check: item.check } : {}),
+      ...optionalObject(item, 'validation'),
     })), LIMITS.evidence),
     reviews: bounded(list(value.reviews).filter(plain).map(readReview), LIMITS.reviews),
     rework: keepOpen(list(value.rework).filter(plain).map((item, index) => ({

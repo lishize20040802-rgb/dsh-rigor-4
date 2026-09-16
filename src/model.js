@@ -10,6 +10,7 @@
 // No IO or clock. A round identity may be supplied for deterministic callers.
 
 import { randomUUID } from 'node:crypto'
+import { parseStrategy, strategyRoles } from './strategy.js'
 
 /** Bumped when the on-disk shape changes. */
 export const SHAPE = 2
@@ -32,10 +33,10 @@ export const LIMITS = Object.freeze({
 })
 
 /** The roles a child can be briefed for. */
-export const ROLES = Object.freeze(['clarify', 'diverge', 'plan-review', 'monitor', 'review', 'rework-check'])
+export const ROLES = Object.freeze(['clarify', 'diverge', 'explore', 'technical', 'plan-review', 'monitor', 'review', 'rework-check'])
 
 /** Roles whose brief is worthless without a reading (and, for most, a plan). */
-const NEEDS_READING = Object.freeze(['plan-review', 'monitor', 'review', 'rework-check'])
+const NEEDS_READING = Object.freeze(['explore', 'technical', 'plan-review', 'monitor', 'review', 'rework-check'])
 const NEEDS_PLAN = Object.freeze(['plan-review', 'review', 'rework-check'])
 
 export function createRound(now = 0, roundId = randomUUID()) {
@@ -98,7 +99,10 @@ export function sameSnapshot(a, b) {
 /** Preparation can change the reading; delivery reviewers must see exact work. */
 export function briefIsCurrent(round, brief) {
   if (brief?.snapshot?.roundId !== round.roundId) return false
-  if (['review', 'rework-check'].includes(brief.role)) return sameSnapshot(brief.snapshot, snapshotOf(round))
+  if (['review', 'rework-check'].includes(brief.role)) {
+    return sameSnapshot(brief.snapshot, snapshotOf(round))
+      && !(round.evidence ?? []).some(item => item.check && sameSnapshot(item.snapshot, snapshotOf(round)) && item.seq >= brief.seq)
+  }
   if (brief.role === 'monitor') return true
   if (brief.requestSeq !== ((round.requests ?? []).at(-1)?.seq ?? 0)) return false
   return brief.role !== 'plan-review' || brief.snapshot.planVersion === round.planVersion
@@ -247,7 +251,7 @@ export function recordReading(round, { literal, needs, unknowns, at, late = fals
  * checked again at the claim, because a plan can be recorded before the reading is
  * complete and the reading can change after it.
  */
-export function recordPlan(round, { approach, steps, risks, at }) {
+export function recordPlan(round, { approach, steps, risks, strategy = null, at }) {
   const { round: stepped, seq } = nextSeq(round)
   const version = Number(round.planVersion ?? round.plan?.version ?? 0) + 1
   const plan = {
@@ -263,6 +267,7 @@ export function recordPlan(round, { approach, steps, risks, at }) {
       evidence: String(item.evidence ?? '').slice(0, 400),
     })),
     risks: (risks ?? []).map(item => String(item).slice(0, 300)),
+    ...(strategy === null ? {} : { strategy: structuredClone(strategy) }),
   }
   return { round: { ...stepped, planVersion: version, plan }, plan }
 }
@@ -276,15 +281,19 @@ export function scaleOf(round) {
   return needs + steps + targets
 }
 
-/** What this round owes in voices, derived from its own record. */
+/** Risk selects review depth. Step/file counts remain informational only. */
 export function requiredRoles(round) {
   const scale = scaleOf(round)
+  const strategy = round?.plan?.strategy
+  const risk = strategy?.risk
+  const levels = ['low', 'medium', 'high']
+  const policy = strategyRoles({ risk: strategy == null ? { impact: 'low', uncertainty: 'low' } : {
+    impact: levels.includes(risk?.impact) ? risk.impact : 'high',
+    uncertainty: levels.includes(risk?.uncertainty) ? risk.uncertainty : 'high',
+  } })
   return {
     scale,
-    reviews: scale <= 4 ? 1 : scale <= 9 ? 2 : 3,
-    clarify: scale >= 5,
-    diverge: scale >= 5,
-    planReview: scale >= 10,
+    ...policy,
     monitor: round?.facts?.sawJob === true,
   }
 }
@@ -366,7 +375,7 @@ export function openBriefs(round) {
 
 // ── evidence: a fact of this session, tied to the need it speaks for ────────
 
-export function linkEvidence(round, { need, fact, note, at }) {
+export function linkEvidence(round, { need, fact, note, check = '', validation = null, at }) {
   if (fact?.kind === 'artifact' && String(fact?.fingerprint ?? '') !== '') {
     const previous = [...(round.evidence ?? [])].reverse().find(item => item.kind === 'artifact' && normalizeTarget(item.path) === normalizeTarget(fact.path))
     if (previous?.fingerprint && previous.fingerprint !== fact.fingerprint && previous.snapshot?.workRevision === round.workRevision) {
@@ -388,6 +397,7 @@ export function linkEvidence(round, { need, fact, note, at }) {
     factSnapshot: fact?.snapshot ?? null,
     snapshot: snapshotOf(round),
     note: String(note ?? '').slice(0, 400),
+    ...(check === '' ? {} : { check, validation: structuredClone(validation) }),
   }, LIMITS.evidence)
 }
 
@@ -412,6 +422,9 @@ export function recordReview(round, { briefId, childId, payload, at, childPreset
   if (brief.state !== 'claimed' || brief.childId === '' || brief.childId !== String(childId ?? '')) return { refusal: refusal('review-child-mismatch', 'the review must come from the child holding this claimed brief.', 'link the child assigned to this brief, or open a new brief.') }
   if (!['review', 'rework-check'].includes(brief.role) || payload?.role !== brief.role) return { refusal: refusal('review-role-mismatch', 'the review role does not match its brief.', 'use the role of the claimed review brief.') }
   if (!sameSnapshot(brief.snapshot, snapshotOf(round))) return { refusal: refusal('stale-review-brief', 'the reading, plan or work changed after this review was briefed.', 'open a fresh review brief against the current work.') }
+  if ((round.evidence ?? []).some(item => item.check && sameSnapshot(item.snapshot, snapshotOf(round)) && item.seq >= brief.seq)) {
+    return { refusal: refusal('stale-review-evidence', 'acceptance evidence was added after this reviewer received its brief.', 'open a fresh review brief after linking the latest check reports, then link that child\'s verdict.') }
+  }
   if ((round.reviews ?? []).some(item => item.childId === String(childId) && sameSnapshot(item.snapshot, snapshotOf(round)))) return { refusal: refusal('duplicate-reviewer', 'this child has already reviewed the current work snapshot.', 'use a new child for an independent review.') }
   if (payload.closedItems.length > 0 && brief.role !== 'rework-check') return { refusal: refusal('rework-role-required', 'only a rework-check can close demanded fixes.', 'open a rework-check brief to verify the fixes.') }
   const openIds = new Set(openRework(round).map(item => item.id))
@@ -530,6 +543,15 @@ export function evaluateDone(round, options = {}) {
   const capabilities = { children: true, person: true, ...(options.capabilities ?? {}) }
   const limitations = (options.limitations ?? []).map(item => String(item ?? '').trim()).filter(item => item !== '')
   const latest = latestReview(round, reading?.version ?? 0)
+  if (plan?.strategy != null) {
+    const parsed = parseStrategy(plan.strategy, {
+      needIds: (reading?.needs ?? []).map(item => item.id), stepIds: (plan.steps ?? []).map(item => item.id),
+    })
+    if (parsed.errors.length > 0) return { ok: false, roles, refusals: [refusal('invalid-strategy', `The stored strategy is invalid: ${parsed.errors.join('; ')}`, 'call rigor_plan with a valid strategy for the current needs and steps; previous records are retained until the replacement is valid.')] }
+  }
+  const checks = plan?.strategy?.checks ?? []
+  const currentChecks = (round.evidence ?? []).filter(item => item.check && sameSnapshot(item.snapshot, snapshotOf(round)))
+  const lastCheckSeq = Math.max(0, ...currentChecks.map(item => item.seq))
 
   if (reading === null) {
     refusals.push(refusal('no-reading', 'a completed claim needs a reading of what the person meant: the literal request plus the needs they never typed.', 'call rigor_read(literal=..., needs="stated: ... => ... | implicit: ... => ...") — one call.'))
@@ -556,9 +578,13 @@ export function evaluateDone(round, options = {}) {
     for (const [role, why] of childRolesMissing(round, roles)) {
       refusals.push(refusal(`no-${role}`, why, `open a ${role} brief (rigor_brief(role="${role}")), hand it to a NEW child, and let it report before claiming again.`))
     }
-    const reviewRoles = new Set((round.reviews ?? []).filter(item => ['review', 'rework-check'].includes(item.role) && item.verdict === 'approve' && item.readingOk === true && sameSnapshot(item.snapshot, snapshotOf(round))).map(item => item.childId).filter(Boolean)).size
+    const reviewRoles = new Set((round.reviews ?? []).filter(item => {
+      const brief = (round.briefs ?? []).find(brief => brief.id === item.briefId)
+      return ['review', 'rework-check'].includes(item.role) && item.verdict === 'approve' && item.readingOk === true
+        && (lastCheckSeq === 0 || briefIsCurrent(round, brief)) && sameSnapshot(item.snapshot, snapshotOf(round))
+    }).map(item => item.childId).filter(Boolean)).size
     if (latest === null || reviewRoles < roles.reviews) {
-      refusals.push(refusal('no-review', `${roles.reviews} independent review(s) are owed for a ${roles.scale}-scale round; ${reviewRoles} finished. The author cannot be the only judge of whether the person's needs are met.`, 'open a review brief (rigor_brief(role="review")), hand it the reading, the plan, the evidence and the artifacts, then link its conclusion with rigor_review.'))
+      refusals.push(refusal('no-review', `${roles.reviews} independent review(s) are owed for the recorded risk; ${reviewRoles} cover the current evidence. The author cannot be the only judge of whether the person's needs are met.`, 'open a review brief (rigor_brief(role="review")), hand it the reading, the plan, the evidence and the artifacts, then link its conclusion with rigor_review.'))
     }
     if (latest !== null) {
       if (latest.verdict !== 'approve') {
@@ -584,14 +610,23 @@ export function evaluateDone(round, options = {}) {
     refusals.push(refusal('no-evidence', `${unlinked.map(need => need.id).join(', ')} have no recorded fact linked to them, so the claim that they are met rests on prose.`, 'call rigor_evidence(needs=..., ref=...) for each — it must name a fact this session actually recorded (#seq, cmd:..., read:... or artifact:...).'))
   }
 
+  for (const check of checks) {
+    const evidence = currentChecks.filter(item => item.check === check.id && item.need === check.need).at(-1)
+    if (evidence?.validation?.status !== 'passed') {
+      refusals.push(refusal('acceptance-not-passed', `${check.id} (${check.kind}): ${check.criterion}. ${evidence ? 'The newest validation failed.' : 'No current validation report is linked.'}`, `run the check and use rigor_evidence(check="${check.id}", needs="${check.need}", ref="artifact:<report.json>", run="cmd:<actual command>"); then obtain a current review.`))
+    }
+  }
+  const blocking = (plan?.strategy?.questions ?? []).filter(item => item.blocking)
+  if (blocking.length > 0) {
+    refusals.push(refusal('unresolved-question', `Unresolved decision(s): ${blocking.map(item => `${item.id}: ${item.question}`).join('; ')}.`, 'resolve these from existing authorization, investigation, or a necessary user answer; revise rigor_plan with the decision and remaining questions before reporting done.'))
+  }
+
   if (options.readingConfirmed === 'yes') {
     const asked = (round.facts?.questions ?? []).find(item => item.seq > reading.seq)
     const answered = asked !== undefined && (round.facts?.answers ?? []).some(item => item.seq > asked.seq)
     if (!asked || !answered) {
       refusals.push(refusal('unconfirmed-claim', 'the report says the person confirmed this reading, and no question went out and came back after the reading was recorded.', 'ask the person (ask_user_question), then re-report; or say honestly that the reading was not confirmed (reading_confirmed="no").'))
     }
-  } else if (roles.scale >= 5 && capabilities.person !== false) {
-    refusals.push(refusal('unconfirmed-reading', `this is ${roles.scale}-scale work and the reading was never confirmed by the person, so the whole round may be built on a misreading nothing but the author has checked.`, 'ask the person one question that would falsify the reading (ask_user_question), then re-report with their answer; or report partial naming the unconfirmed assumption.'))
   }
 
   if ((capabilities.children === false || capabilities.person === false) && limitations.length === 0) {

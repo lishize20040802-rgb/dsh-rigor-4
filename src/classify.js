@@ -43,7 +43,7 @@ export const SPAWN_TOOLS = Object.freeze([
  * profile and may answer any role.
  */
 export const ROLE_TOOLS = Object.freeze({
-  subagent_explore: Object.freeze(['clarify', 'diverge', 'plan-review']),
+  subagent_explore: Object.freeze(['clarify', 'diverge', 'explore', 'technical', 'plan-review']),
   subagent_review: Object.freeze(['review', 'rework-check']),
   subagent_monitor: Object.freeze(['monitor']),
 })
@@ -63,6 +63,8 @@ export const ROLE_TOOLS = Object.freeze({
 export const BRIEF_ROLE_RULES = Object.freeze({
   clarify: Object.freeze({ shell: false }),
   diverge: Object.freeze({ shell: false }),
+  explore: Object.freeze({ shell: false }),
+  technical: Object.freeze({ shell: false }),
   'plan-review': Object.freeze({ shell: false }),
   monitor: Object.freeze({ shell: true }),
   review: Object.freeze({ shell: true }),
