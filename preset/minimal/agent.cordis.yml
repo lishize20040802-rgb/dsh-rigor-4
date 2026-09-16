@@ -1,0 +1,105 @@
+# ── the discipline layer ────────────────────────────────────────────────────
+#
+# rigor-4 is its own package with its own state (<DSH_HOME>/.rigor4/sessions.json) and
+# its own tool names. It imports nothing from rigor, rigor-2 or rigor-3, reads none of
+# their files, and cannot be armed or disarmed by anything they left behind.
+#
+# capabilities is what THIS base can actually provide. The gate never demands a
+# channel the base does not have: with children:false no child role is required and a
+# done claim must declare that no independent review was possible; with person:false
+# the reading cannot be required to have been confirmed by the person.
+
+- id: rigor-4
+  name: 'dsh-rigor-4'
+  config:
+    capabilities:
+      children: false
+      person: false
+# The `minimal` agent preset: a fixed-prompt, single-tool coding-agent composition.
+#
+# The persona is the complete system prompt, so global identity, Web orientation,
+# tool guidance, and later assembly listeners cannot add prompt text. Runtime
+# context snapshots are suppressed for this preset, and the model receives only
+# the persistent shell (`bash` on POSIX, `pwsh` on win32). Context compaction is
+# absent.
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    # The base's fixed persona is the whole system prompt (`complete: true`), which
+    # means the plugin's own prompt section is dropped. The discipline therefore lives
+    # here as well as in src/prompt.js — the two exist for different presets, and the
+    # preset test pins the phrases so they cannot drift silently.
+    prefix: >-
+      You are a helpful software engineer assistant.
+
+      This session runs the rigor-4 discipline. Understand before you change anything: call
+      rigor_read with the literal request and the needs behind it — "stated: ... => ..." for
+      what they said, "implicit: ... => ..." for what they assumed you already know, each
+      with what would show it is met or that you are wrong. Then call rigor_plan: steps, each
+      naming the needs it serves and the evidence it will produce. Link facts you actually
+      observed to needs with rigor_evidence (ref "#<seq>", "cmd:<fragment>", "read:<path>" or
+      "artifact:<path>"); a fact you cannot point at is an assertion, not evidence. This
+      preset has no independent-review channel — no review can happen, and you must say so in
+      rigor_report(limitations=...). Finish with rigor_report:
+      "done" is checked before it is recorded, and refused while the reading, the plan, the
+      evidence, the needs or the declared limitation are missing; "partial" and "blocked" are
+      always allowed and must name what is missing. A passing command is evidence about a
+      command, never proof that the person's need is met.
+    complete: true
+    includeRuntimeContext: false
+
+# The PTY registry is an agent-owned service, so it lives in an entry-local
+# realm. The backend still consumes the host sandbox policy and subprocess
+# implementation, while the tool registers into this agent's scoped catalog.
+# Exactly one shell stack mounts per host: the bash stack gates off win32 and
+# its pwsh twin gates off POSIX, mirroring the one-shot shell rows.
+- id: persistent-shell
+  name: cordis:group
+  group: true
+  isolate:
+    terminals: true
+  config:
+    - id: pty
+      name: '@deepseek-ai/dsh-terminal'
+
+    - id: terminal-bash
+      name: '@deepseek-ai/dsh-terminal-bash'
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 300000
+
+    - id: persistent-bash
+      name: '@deepseek-ai/dsh-tool-bash-persistent'
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 300000
+        description: |-
+          Run commands in a bash shell
+          * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
+          * Network access depends on the task environment. Prefer configured mirrors/proxies when they are available.
+          * State is persistent across command calls and discussions with the user.
+          * To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.
+          * Please avoid commands that may produce a very large amount of output.
+          * Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server in the background.
+
+    - id: terminal-pwsh
+      name: '@deepseek-ai/dsh-terminal-bash'
+      disabled: !!js process.platform !== 'win32'
+      config:
+        shellDialect: pwsh
+        timeoutMs: 300000
+
+    - id: persistent-pwsh
+      name: '@deepseek-ai/dsh-tool-pwsh-persistent'
+      disabled: !!js process.platform !== 'win32'
+      config:
+        timeoutMs: 300000
+        description: |-
+          Run commands in a PowerShell shell
+          * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
+          * You don't have access to the internet via this tool.
+          * State is persistent across command calls and discussions with the user.
+          * Use native Windows paths (C:\...) and $env:NAME variables; this is PowerShell, not bash.
+          * Please avoid commands that may produce a very large amount of output.
+          * Please run long lived commands in the background, e.g. 'Start-Job' or start a server with Start-Process.

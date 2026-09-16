@@ -1,0 +1,4 @@
+name: Rigor-4 · PTC 模式
+description: >-
+  PTC 模式（工具以 SDK 呈现、用 run_code 组合）外加 rigor-4 纪律层。PTC 嵌套调用是否经过 tools/post-execute 未经验证，见 README。
+order: 6

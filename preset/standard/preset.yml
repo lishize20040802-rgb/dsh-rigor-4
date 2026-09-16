@@ -1,0 +1,4 @@
+name: Rigor-4 · 标准模式
+description: >-
+  功能完整的编码 Agent，外加 rigor-4 纪律层（读法/计划/子代理/评审/报告）。外部依赖与标准模式相同。
+order: 5
